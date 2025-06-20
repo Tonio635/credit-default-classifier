@@ -9,13 +9,13 @@ from sklearn.metrics import classification_report, confusion_matrix, f1_score, p
 from sklearn.model_selection import GridSearchCV, RandomizedSearchCV, StratifiedKFold, train_test_split
 from sklearn.pipeline import FunctionTransformer, Pipeline
 
+# Caricamento dati
 df = pd.read_csv('./assets/Dataset3.csv', sep=';')
 
 X = df.drop(['ID', 'default.payment.next.month'], axis=1)
 y = df['default.payment.next.month']
 
-dummy_cols = ['SEX', 'EDUCATION', 'MARRIAGE']
-X = pd.get_dummies(X, columns=dummy_cols, drop_first=True)
+dummy_cols = ['SEX', 'EDUCATION', 'MARRIAGE']  # colonne categoriche
 
 X_train, X_test, y_train, y_test = train_test_split(
     X, y, test_size=0.2, stratify=y, random_state=42
@@ -26,11 +26,16 @@ X_train, X_test, y_train, y_test = train_test_split(
 # ------------------------------------------------------------
 
 skew_feats = [f'BILL_AMT{i}' for i in range(1,7)] + [f'PAY_AMT{i}' for i in range(1,7)]
-shifts = {}
 for col in skew_feats:
-    min_val = X_train[col].min()
-    shift = -min_val + 1 if min_val <= 0 else 0
-    shifts[col] = shift
+    # 1) riempiamo i NaN con 0 per evitare NaN nel log
+    X_train[col] = X_train[col].fillna(0)
+    X_test[col] = X_test[col].fillna(0)
+
+    # 2) calcoliamo lo shift sul minimo tra train e test 
+    all_min = min(X_train[col].min(), X_test[col].min())
+    shift = -all_min + 1 if all_min <= 0 else 0
+
+    # applichiamo il log1p
     X_train[col] = np.log1p(X_train[col] + shift)
     X_test[col]  = np.log1p(X_test[col]  + shift)
 
@@ -63,15 +68,24 @@ def evaluate(model, X_tr, X_te, y_tr, y_te, label):
 # ------------------------------------------------------------
 cv = StratifiedKFold(n_splits=3, shuffle=True, random_state=42)
 
+# Definizione feature numeriche e categoriche
+numeric_features = [c for c in X_train.columns if c not in dummy_cols]
+categorical_features = dummy_cols
 
-numeric_features = X_train.columns.tolist()
-numeric_transformer = Pipeline([('scaler', StandardScaler())])
-preprocessor = ColumnTransformer([('num', numeric_transformer, numeric_features)])
+# ColumnTransformer con OneHotEncoder(handle_unknown='ignore')
+preprocessor = ColumnTransformer([
+    ('num', StandardScaler(), numeric_features),
+    ('cat', OneHotEncoder(drop='first', handle_unknown='ignore'), categorical_features)
+])
+
 rf_base = RandomForestClassifier(class_weight='balanced', random_state=42, n_jobs=-1)
-pipeline_rf = Pipeline([('preprocessor', preprocessor), ('classifier', rf_base)])
+pipeline_rf = Pipeline([
+    ('preprocessor', preprocessor),
+    ('classifier', rf_base)
+])
 
 param_dist = {
-    "classifier__n_estimators": [int(x) for x in np.linspace(200, 600, 5)],   # 200, 300, …, 600
+    "classifier__n_estimators": [int(x) for x in np.linspace(200, 600, 5)],
     "classifier__max_depth":    [None, 10, 20, 30],
     "classifier__max_features": ["sqrt", "log2", None],
     "classifier__min_samples_split": [2, 3, 4],
@@ -99,10 +113,8 @@ evaluate(best_rf, X_train, X_test, y_train, y_test,
 # 4. Lasso (L1) per selezione feature + Random Forest (Modello B)
 # ------------------------------------------------------------
 
-scaler = StandardScaler()
 lasso_clf = LogisticRegression(
     penalty="l1",
-    #C=0.01,                 # forte regolarizzazione → molti coef. a zero
     solver="saga",
     class_weight="balanced",
     random_state=42,
@@ -112,7 +124,7 @@ lasso_clf = LogisticRegression(
 
 # Pipeline di fit per ottenere i coefficienti L1
 pipe_lasso = Pipeline([
-    ('scaler', scaler),
+    ('preprocessor', preprocessor),
     ('lasso', lasso_clf)
 ])
 param_grid_lasso = {
@@ -145,7 +157,7 @@ lasso_opt = LogisticRegression(
 
 # 8. Rifacciamo il fitting per estrarre i coefficienti
 pipe_lasso_opt = Pipeline([
-    ('scaler', StandardScaler()),
+    ('preprocessor', preprocessor),
     ('lasso', lasso_opt)
 ])
 pipe_lasso_opt.fit(X_train, y_train)
@@ -153,19 +165,20 @@ pipe_lasso_opt.fit(X_train, y_train)
 selector = SelectFromModel(
     pipe_lasso_opt.named_steps['lasso'],
     prefit=True,
-    threshold='mean'        # mantieni coefficienti sopra la media
+    threshold='mean'
 )
 mask = selector.get_support()
-selected_cols = X_train.columns[mask]
-print(f"\nFeature selezionate dal Lasso ({mask.sum()} su {X_train.shape[1]}):")
+feature_names = preprocessor.get_feature_names_out()
+selected_cols = feature_names[mask]
+print(f"\nFeature selezionate dal Lasso ({mask.sum()} su {len(feature_names)}):")
 print(list(selected_cols))
 
-# Sub-dataset ridotto
-X_train_sel = X_train[selected_cols]
-X_test_sel  = X_test[selected_cols]
+# Dataset ridotto tramite transform
+X_train_sel = pipe_lasso_opt.named_steps['preprocessor'].transform(X_train)[:, mask]
+X_test_sel  = pipe_lasso_opt.named_steps['preprocessor'].transform(X_test)[:, mask]
 
+# Random Forest sul sotto-spazio ridotto
 param_dist_rf = {k.split('__')[1]: v for k, v in param_dist.items()}
-# Random Forest sul sotto-spazio
 rf_search_sel = RandomizedSearchCV(
     estimator=rf_base,
     param_distributions=param_dist_rf,
