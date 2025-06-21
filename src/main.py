@@ -1,11 +1,12 @@
 import numpy as np
 import pandas as pd
 from sklearn.compose import ColumnTransformer
+from sklearn.impute import SimpleImputer
 from sklearn.preprocessing import OneHotEncoder, RobustScaler, StandardScaler
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.feature_selection import SelectFromModel
 from sklearn.linear_model import LogisticRegression
-from sklearn.metrics import classification_report, confusion_matrix, f1_score, precision_score, recall_score, roc_auc_score, accuracy_score
+from sklearn.metrics import average_precision_score, balanced_accuracy_score, classification_report, confusion_matrix, f1_score, precision_score, recall_score, roc_auc_score, accuracy_score
 from sklearn.model_selection import GridSearchCV, RandomizedSearchCV, StratifiedKFold, train_test_split
 from sklearn.pipeline import FunctionTransformer, Pipeline
 
@@ -16,32 +17,28 @@ X = df.drop(['ID', 'default.payment.next.month'], axis=1)
 y = df['default.payment.next.month']
 
 dummy_cols = ['SEX', 'EDUCATION', 'MARRIAGE']  # colonne categoriche
+pay_cols = [f'PAY_{i}' for i in [0, 2, 3, 4, 5, 6]]
 
 X_train, X_test, y_train, y_test = train_test_split(
     X, y, test_size=0.2, stratify=y, random_state=42
 )
 
 # ------------------------------------------------------------
-# Log-transform + RobustScaler sulle feature skewed
+# Definizione delle colonne “skewed” e relativo preprocessing
+# (eseguito *dentro* la CV per evitare leakage)
 # ------------------------------------------------------------
 
-skew_feats = [f'BILL_AMT{i}' for i in range(1,7)] + [f'PAY_AMT{i}' for i in range(1,7)]
-for col in skew_feats:
-    # 1) riempiamo i NaN con 0 per evitare NaN nel log
-    X_train[col] = X_train[col].fillna(0)
-    X_test[col] = X_test[col].fillna(0)
+skew_feats = [f'BILL_AMT{i}' for i in range(1, 7)] + \
+             [f'PAY_AMT{i}'  for i in range(1, 7)]
 
-    # 2) calcoliamo lo shift sul minimo tra train e test 
-    all_min = min(X_train[col].min(), X_test[col].min())
-    shift = -all_min + 1 if all_min <= 0 else 0
-
-    # applichiamo il log1p
-    X_train[col] = np.log1p(X_train[col] + shift)
-    X_test[col]  = np.log1p(X_test[col]  + shift)
-
-rs = RobustScaler()
-X_train[skew_feats] = rs.fit_transform(X_train[skew_feats])
-X_test[skew_feats]  = rs.transform(X_test[skew_feats])
+# Pipeline: imputazione 0 → log1p → RobustScaler
+# Nota: with_mean=False evita di togliere di nuovo la media (inefficiente su sparse)
+skew_pipe = Pipeline([
+    ('imputer', SimpleImputer(strategy='constant', fill_value=0)),
+    ('log', FunctionTransformer(lambda X: np.log1p(np.maximum(X, 0)), feature_names_out='one-to-one')),
+    ('rscale', RobustScaler()),
+    ('sscale', StandardScaler(with_mean=False))
+])
 
 # ------------------------------------------------------------
 # 2. Funzione di valutazione (riuso per entrambi i modelli)
@@ -63,19 +60,40 @@ def evaluate(model, X_tr, X_te, y_tr, y_te, label):
     print("\nClassification report (Test):")
     print(classification_report(y_te, model.predict(X_te), digits=3))
 
+def evaluate_balanced(model, X, y, label="Test"):
+    """
+    Stampa Balanced-Accuracy e PR-AUC (media precision-recall area).
+    """
+    y_pred  = model.predict(X)
+    y_proba = model.predict_proba(X)[:, 1]
+
+    bal_acc = balanced_accuracy_score(y, y_pred)
+    pr_auc  = average_precision_score(y, y_proba)
+
+    print(f"[{label}] Balanced-Acc={bal_acc:.3f} | PR-AUC={pr_auc:.3f}")
+
 # ------------------------------------------------------------
 # Pipeline completa con preprocessing e RandomForest
 # ------------------------------------------------------------
 cv = StratifiedKFold(n_splits=3, shuffle=True, random_state=42)
 
 # Definizione feature numeriche e categoriche
-numeric_features = [c for c in X_train.columns if c not in dummy_cols]
-categorical_features = dummy_cols
+categorical_features = dummy_cols + pay_cols
+numeric_features = [c for c in X_train.columns if c not in categorical_features]
+
+# Sottogruppo di numeriche non-skew da standardizzare
+numeric_other = [c for c in numeric_features if c not in skew_feats]
 
 # ColumnTransformer con OneHotEncoder(handle_unknown='ignore')
 preprocessor = ColumnTransformer([
-    ('num', StandardScaler(), numeric_features),
-    ('cat', OneHotEncoder(drop='first', handle_unknown='ignore'), categorical_features)
+    ('skew', skew_pipe, skew_feats),                    # log + robust scaling
+    ('num', StandardScaler(), numeric_other),                   # altre numeriche
+    ('cat', OneHotEncoder(
+        drop='first',
+        handle_unknown='ignore',
+        sparse_output=False,
+        min_frequency=2
+    ), categorical_features)
 ])
 
 rf_base = RandomForestClassifier(class_weight='balanced', random_state=42, n_jobs=-1)
@@ -85,18 +103,20 @@ pipeline_rf = Pipeline([
 ])
 
 param_dist = {
-    "classifier__n_estimators": [int(x) for x in np.linspace(200, 600, 5)],
-    "classifier__max_depth":    [None, 10, 20, 30],
-    "classifier__max_features": ["sqrt", "log2", None],
-    "classifier__min_samples_split": [2, 3, 4],
-    "classifier__min_samples_leaf":  [1, 2]
+    "classifier__n_estimators": list(range(400, 1001, 100)),
+    "classifier__max_depth":    [None, 20, 40, 60],
+    "classifier__max_features": ["sqrt", "log2", 0.5, None],
+    "classifier__min_samples_split": [2, 5, 10],
+    "classifier__min_samples_leaf":  [1, 2, 4, 8],
+    "classifier__class_weight":  ["balanced", "balanced_subsample"],
+    "classifier__max_samples":   [None, 0.8, 0.6]
 }
 
 rf_search = RandomizedSearchCV(
     estimator=pipeline_rf,
     param_distributions=param_dist,
-    n_iter=20,
-    scoring='roc_auc',
+    n_iter=50,
+    scoring='average_precision',
     cv=cv,
     n_jobs=-1,
     random_state=42,
@@ -108,6 +128,7 @@ best_rf = rf_search.best_estimator_
 
 evaluate(best_rf, X_train, X_test, y_train, y_test,
          label="Random Forest - TUTTE le feature")
+evaluate_balanced(best_rf, X_test, y_test)
 
 # ------------------------------------------------------------
 # 4. Lasso (L1) per selezione feature + Random Forest (Modello B)
@@ -183,7 +204,7 @@ rf_search_sel = RandomizedSearchCV(
     estimator=rf_base,
     param_distributions=param_dist_rf,
     n_iter=20,
-    scoring='roc_auc',
+    scoring='average_precision',
     cv=cv,
     n_jobs=-1,
     random_state=42,
@@ -195,3 +216,4 @@ best_rf_sel = rf_search_sel.best_estimator_
 
 evaluate(best_rf_sel, X_train_sel, X_test_sel, y_train, y_test,
          label="Random Forest - dopo Lasso")
+evaluate_balanced(best_rf_sel, X_test_sel, y_test) 
