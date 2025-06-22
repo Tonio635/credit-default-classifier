@@ -1,3 +1,4 @@
+from matplotlib import pyplot as plt
 import numpy as np
 import pandas as pd
 from sklearn.compose import ColumnTransformer
@@ -35,9 +36,13 @@ skew_feats = [f'BILL_AMT{i}' for i in range(1, 7)] + \
 # Nota: with_mean=False evita di togliere di nuovo la media (inefficiente su sparse)
 skew_pipe = Pipeline([
     ('imputer', SimpleImputer(strategy='constant', fill_value=0)),
-    ('log', FunctionTransformer(lambda X: np.log1p(np.maximum(X, 0)), feature_names_out='one-to-one')),
-    ('rscale', RobustScaler()),
-    ('sscale', StandardScaler(with_mean=False))
+    ('log', FunctionTransformer(lambda X: np.sign(X)*np.log1p(np.abs(X)), feature_names_out='one-to-one')),
+    ('rscale', RobustScaler())
+])
+
+ordinal_pipe = Pipeline([
+    ('imputer', SimpleImputer(strategy='most_frequent')),
+    ('scaler', StandardScaler())
 ])
 
 # ------------------------------------------------------------
@@ -78,7 +83,7 @@ def evaluate_balanced(model, X, y, label="Test"):
 cv = StratifiedKFold(n_splits=3, shuffle=True, random_state=42)
 
 # Definizione feature numeriche e categoriche
-categorical_features = dummy_cols + pay_cols
+categorical_features = dummy_cols
 numeric_features = [c for c in X_train.columns if c not in categorical_features]
 
 # Sottogruppo di numeriche non-skew da standardizzare
@@ -88,6 +93,7 @@ numeric_other = [c for c in numeric_features if c not in skew_feats]
 preprocessor = ColumnTransformer([
     ('skew', skew_pipe, skew_feats),                    # log + robust scaling
     ('num', StandardScaler(), numeric_other),                   # altre numeriche
+    ('ord', ordinal_pipe, pay_cols),
     ('cat', OneHotEncoder(
         drop='first',
         handle_unknown='ignore',
@@ -97,23 +103,23 @@ preprocessor = ColumnTransformer([
 ])
 
 rf_base = RandomForestClassifier(class_weight='balanced', random_state=42, n_jobs=-1)
-pipeline_rf = Pipeline([
-    ('preprocessor', preprocessor),
-    ('classifier', rf_base)
+pipe_rf = Pipeline([
+    ('prep', preprocessor),
+    ('rf', rf_base)
 ])
 
 param_dist = {
-    "classifier__n_estimators": list(range(400, 1001, 100)),
-    "classifier__max_depth":    [None, 20, 40, 60],
-    "classifier__max_features": ["sqrt", "log2", 0.5, None],
-    "classifier__min_samples_split": [2, 5, 10],
-    "classifier__min_samples_leaf":  [1, 2, 4, 8],
-    "classifier__class_weight":  ["balanced", "balanced_subsample"],
-    "classifier__max_samples":   [None, 0.8, 0.6]
+    "rf__n_estimators": list(range(400, 1001, 100)),
+    "rf__max_depth":    [None, 15, 20, 25, 30],
+    "rf__max_features": ["sqrt", "log2", 0.5, None],
+    "rf__min_samples_split": [2, 5, 10],
+    "rf__min_samples_leaf":  [5, 10, 20],
+    "rf__class_weight":  ["balanced", "balanced_subsample"],
+    "rf__max_samples":   [None, 0.8, 0.6]
 }
 
 rf_search = RandomizedSearchCV(
-    estimator=pipeline_rf,
+    estimator=pipe_rf,
     param_distributions=param_dist,
     n_iter=50,
     scoring='average_precision',
@@ -131,89 +137,51 @@ evaluate(best_rf, X_train, X_test, y_train, y_test,
 evaluate_balanced(best_rf, X_test, y_test)
 
 # ------------------------------------------------------------
-# 4. Lasso (L1) per selezione feature + Random Forest (Modello B)
+# 4. Pipeline B:   Lasso-feature-selection  + RandomForest
+#                  (tutto in UNICA pipeline, selezione dentro la CV)
 # ------------------------------------------------------------
 
-lasso_clf = LogisticRegression(
-    penalty="l1",
-    solver="saga",
-    class_weight="balanced",
-    random_state=42,
-    n_jobs=-1,
-    max_iter=5000
-)
-
-# Pipeline di fit per ottenere i coefficienti L1
-pipe_lasso = Pipeline([
-    ('preprocessor', preprocessor),
-    ('lasso', lasso_clf)
+pipe_lasso_rf = Pipeline([
+    ('prep', preprocessor),
+    ('sel',  SelectFromModel(
+                 LogisticRegression(penalty='l1',
+                                    solver='saga',
+                                    class_weight='balanced',
+                                    max_iter=5000),
+                 threshold='median',        # oppure max_features=30, threshold=-np.inf
+                 max_features=30)),
+    ('rf',   rf_base)
 ])
-param_grid_lasso = {
-    'lasso__C': [0.001, 0.01, 0.1, 1, 10, 100, 200, 500]
+
+param_grid_lasso_rf = {
+    # Lasso
+    'sel__estimator__C':  np.logspace(-2, 1, 6),   # 0.01 … 10
+    # Random Forest
+    'rf__n_estimators':   [600, 800],
+    'rf__max_depth':      [15, 20, 25],
+    'rf__min_samples_leaf': [5, 10],
+    'rf__max_features':   ['sqrt', 0.5]
 }
-search_lasso = GridSearchCV(
-    estimator=pipe_lasso,
-    param_grid=param_grid_lasso,
-    scoring='roc_auc',
-    cv=cv,
-    n_jobs=-1,
-    verbose=1
-)
 
-search_lasso.fit(X_train, y_train)
-
-best_C = search_lasso.best_params_['lasso__C']
-
-print(f"\nMiglior parametro C per Lasso: {best_C}")
-
-lasso_opt = LogisticRegression(
-    penalty="l1",
-    C=best_C,
-    solver="saga",
-    class_weight="balanced",
-    random_state=42,
-    max_iter=5000,
-    n_jobs=-1
-)
-
-# 8. Rifacciamo il fitting per estrarre i coefficienti
-pipe_lasso_opt = Pipeline([
-    ('preprocessor', preprocessor),
-    ('lasso', lasso_opt)
-])
-pipe_lasso_opt.fit(X_train, y_train)
-
-selector = SelectFromModel(
-    pipe_lasso_opt.named_steps['lasso'],
-    prefit=True,
-    threshold='mean'
-)
-mask = selector.get_support()
-feature_names = preprocessor.get_feature_names_out()
-selected_cols = feature_names[mask]
-print(f"\nFeature selezionate dal Lasso ({mask.sum()} su {len(feature_names)}):")
-print(list(selected_cols))
-
-# Dataset ridotto tramite transform
-X_train_sel = pipe_lasso_opt.named_steps['preprocessor'].transform(X_train)[:, mask]
-X_test_sel  = pipe_lasso_opt.named_steps['preprocessor'].transform(X_test)[:, mask]
-
-# Random Forest sul sotto-spazio ridotto
-param_dist_rf = {k.split('__')[1]: v for k, v in param_dist.items()}
-rf_search_sel = RandomizedSearchCV(
-    estimator=rf_base,
-    param_distributions=param_dist_rf,
-    n_iter=20,
+search_lasso_rf = GridSearchCV(
+    pipe_lasso_rf,
+    param_grid_lasso_rf,
     scoring='average_precision',
     cv=cv,
     n_jobs=-1,
-    random_state=42,
     verbose=1
 )
 
-rf_search_sel.fit(X_train_sel, y_train)
-best_rf_sel = rf_search_sel.best_estimator_
+search_lasso_rf.fit(X_train, y_train)
+best_rf_sel = search_lasso_rf.best_estimator_
 
-evaluate(best_rf_sel, X_train_sel, X_test_sel, y_train, y_test,
+sel_step   = best_rf_sel.named_steps['sel']
+prep_step  = best_rf_sel.named_steps['prep']
+
+mask = sel_step.get_support()
+feat = prep_step.get_feature_names_out()
+print("Feature tenute:", feat[mask])
+
+evaluate(best_rf_sel, X_train, X_test, y_train, y_test,
          label="Random Forest - dopo Lasso")
-evaluate_balanced(best_rf_sel, X_test_sel, y_test) 
+evaluate_balanced(best_rf_sel, X_test, y_test)
