@@ -1,4 +1,3 @@
-from matplotlib import pyplot as plt
 import numpy as np
 import pandas as pd
 from sklearn.compose import ColumnTransformer
@@ -80,18 +79,18 @@ def evaluate_balanced(model, X, y, label="Test"):
 # ------------------------------------------------------------
 # Pipeline completa con preprocessing e RandomForest
 # ------------------------------------------------------------
-cv = StratifiedKFold(n_splits=3, shuffle=True, random_state=42)
+cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
 
 # Definizione feature numeriche e categoriche
 categorical_features = dummy_cols
 numeric_features = [c for c in X_train.columns if c not in categorical_features]
 
 # Sottogruppo di numeriche non-skew da standardizzare
-numeric_other = [c for c in numeric_features if c not in skew_feats]
+numeric_other = [c for c in numeric_features if c not in skew_feats + pay_cols]
 
 # ColumnTransformer con OneHotEncoder(handle_unknown='ignore')
 preprocessor = ColumnTransformer([
-    ('skew', skew_pipe, skew_feats),                    # log + robust scaling
+    ('skew', skew_pipe, skew_feats),                            # log + robust scaling
     ('num', StandardScaler(), numeric_other),                   # altre numeriche
     ('ord', ordinal_pipe, pay_cols),
     ('cat', OneHotEncoder(
