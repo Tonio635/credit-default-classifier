@@ -169,7 +169,7 @@ Complement the Random-Forest baselines with tree-boosting models that often exce
 ## License
 
 This project is released under the **MIT License**.
-Dataset licensed by the original UCI authors (Yeh & Lien, 2009) for research‑only use.
+Dataset licensed as CC0: Public Domain.
 
 
 

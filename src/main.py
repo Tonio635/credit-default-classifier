@@ -10,13 +10,15 @@ from sklearn.metrics import average_precision_score, balanced_accuracy_score, cl
 from sklearn.model_selection import GridSearchCV, RandomizedSearchCV, StratifiedKFold, train_test_split
 from sklearn.pipeline import FunctionTransformer, Pipeline
 
-# Caricamento dati
+# ------------------------------------------------------------
+# Data loading
+# ------------------------------------------------------------
 df = pd.read_csv('./assets/Dataset3.csv', sep=';')
 
 X = df.drop(['ID', 'default.payment.next.month'], axis=1)
 y = df['default.payment.next.month']
 
-dummy_cols = ['SEX', 'EDUCATION', 'MARRIAGE']  # colonne categoriche
+dummy_cols = ['SEX', 'EDUCATION', 'MARRIAGE']  # categorical features
 pay_cols = [f'PAY_{i}' for i in [0, 2, 3, 4, 5, 6]]
 
 X_train, X_test, y_train, y_test = train_test_split(
@@ -24,15 +26,13 @@ X_train, X_test, y_train, y_test = train_test_split(
 )
 
 # ------------------------------------------------------------
-# Definizione delle colonne “skewed” e relativo preprocessing
-# (eseguito *dentro* la CV per evitare leakage)
+# Definition of preprocessing pipelines
 # ------------------------------------------------------------
 
 skew_feats = [f'BILL_AMT{i}' for i in range(1, 7)] + \
              [f'PAY_AMT{i}'  for i in range(1, 7)]
 
-# Pipeline: imputazione 0 → log1p → RobustScaler
-# Nota: with_mean=False evita di togliere di nuovo la media (inefficiente su sparse)
+# Pipeline: impute 0 → log1p → RobustScaler
 skew_pipe = Pipeline([
     ('imputer', SimpleImputer(strategy='constant', fill_value=0)),
     ('log', FunctionTransformer(lambda X: np.sign(X)*np.log1p(np.abs(X)), feature_names_out='one-to-one')),
@@ -45,7 +45,7 @@ ordinal_pipe = Pipeline([
 ])
 
 # ------------------------------------------------------------
-# 2. Funzione di valutazione (riuso per entrambi i modelli)
+# Evaluation functions
 # ------------------------------------------------------------
 def evaluate(model, X_tr, X_te, y_tr, y_te, label):
     print("\n" + "=" * 30, label, "=" * 30)
@@ -77,21 +77,21 @@ def evaluate_balanced(model, X, y, label="Test"):
     print(f"[{label}] Balanced-Acc={bal_acc:.3f} | PR-AUC={pr_auc:.3f}")
 
 # ------------------------------------------------------------
-# Pipeline completa con preprocessing e RandomForest
+# Complete pipeline: Random Forest with all features
 # ------------------------------------------------------------
 cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
 
-# Definizione feature numeriche e categoriche
+# Feature definition
 categorical_features = dummy_cols
 numeric_features = [c for c in X_train.columns if c not in categorical_features]
 
-# Sottogruppo di numeriche non-skew da standardizzare
+# Subset of numeric features that are not skewed that will be standardized
 numeric_other = [c for c in numeric_features if c not in skew_feats + pay_cols]
 
-# ColumnTransformer con OneHotEncoder(handle_unknown='ignore')
+
 preprocessor = ColumnTransformer([
-    ('skew', skew_pipe, skew_feats),                            # log + robust scaling
-    ('num', StandardScaler(), numeric_other),                   # altre numeriche
+    ('skew', skew_pipe, skew_feats),
+    ('num', StandardScaler(), numeric_other),
     ('ord', ordinal_pipe, pay_cols),
     ('cat', OneHotEncoder(
         drop='first',
@@ -136,8 +136,7 @@ evaluate(best_rf, X_train, X_test, y_train, y_test,
 evaluate_balanced(best_rf, X_test, y_test)
 
 # ------------------------------------------------------------
-# 4. Pipeline B:   Lasso-feature-selection  + RandomForest
-#                  (tutto in UNICA pipeline, selezione dentro la CV)
+# Complete pipeline: Random Forest with Lasso feature selection
 # ------------------------------------------------------------
 
 pipe_lasso_rf = Pipeline([
@@ -147,14 +146,14 @@ pipe_lasso_rf = Pipeline([
                                     solver='saga',
                                     class_weight='balanced',
                                     max_iter=5000),
-                 threshold='median',        # oppure max_features=30, threshold=-np.inf
+                 threshold='median',
                  max_features=30)),
     ('rf',   rf_base)
 ])
 
 param_grid_lasso_rf = {
     # Lasso
-    'sel__estimator__C':  np.logspace(-2, 1, 6),   # 0.01 … 10
+    'sel__estimator__C':  np.logspace(-2, 1, 6),
     # Random Forest
     'rf__n_estimators':   [600, 800],
     'rf__max_depth':      [15, 20, 25],
