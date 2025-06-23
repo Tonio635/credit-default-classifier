@@ -36,6 +36,7 @@ _Antonio Giuseppe Doronzo_ · 11016435 · antoniogiuseppe.doronzo@polimi.it
 | SciPy        | ≥ 1.11 < 2.0          |
 | joblib       | ≥ 1.3 < 2.0           |
 | matplotlib   | ≥ 3.8 < 4.0           |
+| seaborn      | ≥ 0.13.2              |
 | streamlit    | ≥ 1.44 < 2.0          |
 
 Create a virtual environment and install dependencies with:
