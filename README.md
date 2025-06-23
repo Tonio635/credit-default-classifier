@@ -1,5 +1,8 @@
 # Credit‑Card Default Prediction - Fintech 2024/25
 
+## Author
+_Antonio Giuseppe Doronzo_ · 11016435 · antoniogiuseppe.doronzo@polimi.it
+
 ## Dataset
 
 [Default of credit‑card clients in Taiwan](https://www.kaggle.com/datasets/uciml/default-of-credit-card-clients-dataset) (UCI, Yeh & Lien 2009)
