@@ -1,5 +1,7 @@
 import numpy as np
 import pandas as pd
+import joblib, pickle
+from pathlib import Path
 from sklearn.compose import ColumnTransformer
 from sklearn.impute import SimpleImputer
 from sklearn.preprocessing import OneHotEncoder, RobustScaler, StandardScaler
@@ -11,9 +13,51 @@ from sklearn.model_selection import GridSearchCV, RandomizedSearchCV, Stratified
 from sklearn.pipeline import FunctionTransformer, Pipeline
 
 # ------------------------------------------------------------
+# Function to apply signed log transformation
+# ------------------------------------------------------------
+def signed_log_transform(X):
+    """
+    Apply signed log transformation to the input data.
+    """
+    return np.sign(X) * np.log1p(np.abs(X))
+
+# ------------------------------------------------------------
+# Evaluation functions
+# ------------------------------------------------------------
+def evaluate(model, X_tr, X_te, y_tr, y_te, label):
+    print("\n" + "=" * 30, label, "=" * 30)
+    for split, (X_split, y_split) in (("Train", (X_tr, y_tr)),
+                                      ("Test",  (X_te, y_te))):
+        y_pred = model.predict(X_split)
+        y_prob = model.predict_proba(X_split)[:, 1]
+        print(f"[{split}] "
+              f"Accuracy={accuracy_score(y_split, y_pred):.3f} | "
+              f"Precision={precision_score(y_split, y_pred):.3f} | "
+              f"Recall={recall_score(y_split, y_pred):.3f} | "
+              f"F1={f1_score(y_split, y_pred):.3f} | "
+              f"AUC={roc_auc_score(y_split, y_prob):.3f}")
+    print("\nConfusion matrix (Test):")
+    print(confusion_matrix(y_te, model.predict(X_te)))
+    print("\nClassification report (Test):")
+    print(classification_report(y_te, model.predict(X_te), digits=3))
+
+def evaluate_balanced(model, X, y, label="Test"):
+    """
+    Print Balanced-Accuracy e PR-AUC (media precision-recall area).
+    """
+    y_pred  = model.predict(X)
+    y_proba = model.predict_proba(X)[:, 1]
+
+    bal_acc = balanced_accuracy_score(y, y_pred)
+    pr_auc  = average_precision_score(y, y_proba)
+
+    print(f"[{label}] Balanced-Acc={bal_acc:.3f} | PR-AUC={pr_auc:.3f}")
+
+# ------------------------------------------------------------
 # Data loading
 # ------------------------------------------------------------
 df = pd.read_csv('./assets/Dataset3.csv', sep=';')
+MODEL_DIR = Path("./assets/models")
 
 X = df.drop(['ID', 'default.payment.next.month'], axis=1)
 y = df['default.payment.next.month']
@@ -43,38 +87,6 @@ ordinal_pipe = Pipeline([
     ('imputer', SimpleImputer(strategy='most_frequent')),
     ('scaler', StandardScaler())
 ])
-
-# ------------------------------------------------------------
-# Evaluation functions
-# ------------------------------------------------------------
-def evaluate(model, X_tr, X_te, y_tr, y_te, label):
-    print("\n" + "=" * 30, label, "=" * 30)
-    for split, (X_split, y_split) in (("Train", (X_tr, y_tr)),
-                                      ("Test",  (X_te, y_te))):
-        y_pred = model.predict(X_split)
-        y_prob = model.predict_proba(X_split)[:, 1]
-        print(f"[{split}] "
-              f"Accuracy={accuracy_score(y_split, y_pred):.3f} | "
-              f"Precision={precision_score(y_split, y_pred):.3f} | "
-              f"Recall={recall_score(y_split, y_pred):.3f} | "
-              f"F1={f1_score(y_split, y_pred):.3f} | "
-              f"AUC={roc_auc_score(y_split, y_prob):.3f}")
-    print("\nConfusion matrix (Test):")
-    print(confusion_matrix(y_te, model.predict(X_te)))
-    print("\nClassification report (Test):")
-    print(classification_report(y_te, model.predict(X_te), digits=3))
-
-def evaluate_balanced(model, X, y, label="Test"):
-    """
-    Stampa Balanced-Accuracy e PR-AUC (media precision-recall area).
-    """
-    y_pred  = model.predict(X)
-    y_proba = model.predict_proba(X)[:, 1]
-
-    bal_acc = balanced_accuracy_score(y, y_pred)
-    pr_auc  = average_precision_score(y, y_proba)
-
-    print(f"[{label}] Balanced-Acc={bal_acc:.3f} | PR-AUC={pr_auc:.3f}")
 
 # ------------------------------------------------------------
 # Complete pipeline: Random Forest with all features
@@ -132,7 +144,7 @@ rf_search.fit(X_train, y_train)
 best_rf = rf_search.best_estimator_
 
 evaluate(best_rf, X_train, X_test, y_train, y_test,
-         label="Random Forest - TUTTE le feature")
+         label="Random Forest - ALL features")
 evaluate_balanced(best_rf, X_test, y_test)
 
 # ------------------------------------------------------------
@@ -178,8 +190,23 @@ prep_step  = best_rf_sel.named_steps['prep']
 
 mask = sel_step.get_support()
 feat = prep_step.get_feature_names_out()
-print("Feature tenute:", feat[mask])
+print("Feature selected:", feat[mask])
 
 evaluate(best_rf_sel, X_train, X_test, y_train, y_test,
-         label="Random Forest - dopo Lasso")
+         label="Random Forest - after Lasso")
 evaluate_balanced(best_rf_sel, X_test, y_test)
+
+# ------------------------------------------------------------
+# Save the best model
+# ------------------------------------------------------------
+joblib.dump(best_rf,      MODEL_DIR / f"rf_full.joblib",   compress=3)
+joblib.dump(best_rf_sel,  MODEL_DIR / f"rf_lasso.joblib",  compress=3)
+
+print("\nModels saved in:", MODEL_DIR)
+
+with open(MODEL_DIR / f"test_split.pkl", "wb") as f:
+    pickle.dump((X_test, y_test), f)
+
+sel_mask = best_rf_sel.named_steps['sel'].get_support()
+feat_all = best_rf_sel.named_steps['prep'].get_feature_names_out()
+pickle.dump(feat_all[sel_mask], open(MODEL_DIR / f"rf_lasso_features.pkl", "wb"))
