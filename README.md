@@ -27,10 +27,13 @@
 | Package      | Version               |
 | ------------ | --------------------- |
 | Python       | 3.11.x                |
-| scikit‑learn | ≥ 1.5                 |
-| NumPy        | ≥ 1.26                |
-| pandas       | ≥ 2.2                 |
-| matplotlib   | ≥ 3.8 *(plots only)*  |
+| scikit‑learn | ≥ 1.6 < 1.8           |
+| NumPy        | ≥ 1.26 < 2.0          |
+| pandas       | ≥ 2.2 < 3.0           |
+| SciPy        | ≥ 1.11 < 2.0          |
+| joblib       | ≥ 1.3 < 2.0           |
+| matplotlib   | ≥ 3.8 < 4.0           |
+| streamlit    | ≥ 1.44 < 2.0          |
 
 Create a virtual environment and install dependencies with:
 
@@ -40,11 +43,16 @@ source .venv/bin/activate   # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-The code is fully contained in `main.py`; execute it with
+---
+## How to run the project
 
-```bash
-python main.py
-```
+| Component                   | Entry point / command                        | Purpose |
+|-----------------------------|----------------------------------------------|---------|
+| **Training script**         | `python main.py`                             | Trains both models (full & Lasso), performs evaluation and saves all artefacts in `./assets/models/`. If the artefacts already exist, the script skips training and simply reloads them. |
+| **Notebook**                | `notebooks/workflow.ipynb` → open with `jupyter notebook` | Re‑creates the full training & evaluation workflow so every step can be inspected interactively. It **does not** reload the saved artefacts. |
+| **Streamlit app**           | `streamlit run app.py`                       | Loads the saved artefacts and provides an interactive UI for single predictions, batch scoring and model insights (ROC/PR curves, PR curves, confusion matrix, feature importances). |
+
+> **Tip**:  If the artefacts are missing, run the training script first; otherwise the Streamlit app will raise an error at startup.
 
 Everything is reproducible thanks to `random_state = 42` (set for split, CV, estimator & selector).
 
@@ -66,6 +74,7 @@ All operations are wrapped in a `ColumnTransformer` **inside** every pipeline �
 
 ---
 ## Models
+All metrics reported in the following section assume a decision threshold of 0.50; in the Streamlit app you can freely adjust this threshold and immediately observe how the confusion matrix, ROC/PR curves and summary table react.
 
 ### Model A - Random Forest
 

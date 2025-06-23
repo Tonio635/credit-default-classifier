@@ -183,8 +183,8 @@ with TAB_SINGLE:
 # Batch scoring
 # ------------------------------------------------------------
 with TAB_BATCH:
-    st.subheader("Batch scoring da CSV")
-    uploaded = st.file_uploader("Carica un CSV con le colonne del training", type="csv")
+    st.subheader("Batch scoring from CSV")
+    uploaded = st.file_uploader("Upload a CSV file", type="csv")
     if uploaded:
         df_batch = pd.read_csv(uploaded, sep=";")
         for col in orig_cols:
@@ -194,9 +194,9 @@ with TAB_BATCH:
         probs = model.predict_proba(df_batch)[:, 1]
         df_batch["prob_default"] = np.round(probs, 3)
         df_batch["prediction"] = (probs >= threshold).astype(int)
-        st.success("✓ Predizioni calcolate")
+        st.success("✓ Predictions completed!")
         st.dataframe(df_batch.head(50))
-        st.download_button("📥 Scarica tutte le predizioni", df_batch.to_csv(index=False).encode(), "predizioni.csv", mime="text/csv")
+        st.download_button("📥 Download all the predictions", df_batch.to_csv(index=False).encode(), "predictions.csv", mime="text/csv")
     else:
         st.info("Upload a CSV file to start batch scoring.")
 
