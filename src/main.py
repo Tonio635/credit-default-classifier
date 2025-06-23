@@ -59,15 +59,47 @@ def evaluate_balanced(model, X, y, label="Test"):
 df = pd.read_csv('./assets/Dataset3.csv', sep=';')
 MODEL_DIR = Path("./assets/models")
 
+MODEL_DIR.mkdir(parents=True, exist_ok=True)
+
 X = df.drop(['ID', 'default.payment.next.month'], axis=1)
 y = df['default.payment.next.month']
-
-dummy_cols = ['SEX', 'EDUCATION', 'MARRIAGE']  # categorical features
-pay_cols = [f'PAY_{i}' for i in [0, 2, 3, 4, 5, 6]]
 
 X_train, X_test, y_train, y_test = train_test_split(
     X, y, test_size=0.2, stratify=y, random_state=42
 )
+
+path_full   = MODEL_DIR / "rf_full.joblib"
+path_lasso  = MODEL_DIR / "rf_lasso.joblib"
+path_split  = MODEL_DIR / "test_split.pkl"
+path_feats  = MODEL_DIR / "rf_lasso_features.pkl"
+
+pretrained_ok = all(p.exists() for p in (path_full, path_lasso, path_split, path_feats))
+
+if pretrained_ok:
+    print("[INFO] Models and data already saved, loading them...")
+
+    best_rf      = joblib.load(path_full)
+    best_rf_sel  = joblib.load(path_lasso)
+
+    with open(path_split, "rb") as f:
+        X_test, y_test = pickle.load(f)
+
+    rf_features = pickle.load(open(path_feats, "rb"))
+
+    evaluate(best_rf, X_train, X_test, y_train, y_test,
+         label="Random Forest - ALL features")
+    evaluate_balanced(best_rf, X_test, y_test)
+    
+    print("\nLasso Feature selected:", rf_features)
+
+    evaluate(best_rf_sel, X_train, X_test, y_train, y_test,
+            label="Random Forest - after Lasso")
+    evaluate_balanced(best_rf_sel, X_test, y_test)
+
+    exit(0)
+
+dummy_cols = ['SEX', 'EDUCATION', 'MARRIAGE']  # categorical features
+pay_cols = [f'PAY_{i}' for i in [0, 2, 3, 4, 5, 6]]
 
 # ------------------------------------------------------------
 # Definition of preprocessing pipelines
@@ -190,7 +222,7 @@ prep_step  = best_rf_sel.named_steps['prep']
 
 mask = sel_step.get_support()
 feat = prep_step.get_feature_names_out()
-print("Feature selected:", feat[mask])
+print("\nLasso Feature selected:", feat[mask])
 
 evaluate(best_rf_sel, X_train, X_test, y_train, y_test,
          label="Random Forest - after Lasso")
