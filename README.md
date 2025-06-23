@@ -48,9 +48,9 @@ pip install -r requirements.txt
 
 | Component                   | Entry point / command                        | Purpose |
 |-----------------------------|----------------------------------------------|---------|
-| **Training script**         | `python main.py`                             | Trains both models (full & Lasso), performs evaluation and saves all artefacts in `./assets/models/`. If the artefacts already exist, the script skips training and simply reloads them. |
-| **Notebook**                | `notebooks/workflow.ipynb` → open with `jupyter notebook` | Re‑creates the full training & evaluation workflow so every step can be inspected interactively. It **does not** reload the saved artefacts. |
-| **Streamlit app**           | `streamlit run app.py`                       | Loads the saved artefacts and provides an interactive UI for single predictions, batch scoring and model insights (ROC/PR curves, PR curves, confusion matrix, feature importances). |
+| **Training script**         | `python ./src/main.py`                             | Trains both models (full & Lasso), performs evaluation and saves all artefacts in `./assets/models/`. If the artefacts already exist, the script skips training and simply reloads them. |
+| **Notebook**                | `notebooks/credit_card_default_prediction.ipynb` → open with `jupyter notebook` | Re‑creates the full training & evaluation workflow so every step can be inspected interactively. It **does not** reload the saved artefacts. |
+| **Streamlit app**           | `streamlit run ./src/app.py`                       | Loads the saved artefacts and provides an interactive UI for single predictions, batch scoring and model insights (ROC/PR curves, PR curves, confusion matrix, feature importances). |
 
 > **Tip**:  If the artefacts are missing, run the training script first; otherwise the Streamlit app will raise an error at startup.
 
